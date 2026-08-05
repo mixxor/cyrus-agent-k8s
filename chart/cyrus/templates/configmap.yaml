@@ -1,0 +1,26 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cyrus.fullname" . }}-config
+  labels:
+    {{- include "cyrus.labels" . | nindent 4 }}
+data:
+  # Copied (not symlinked) to ~/.cyrus/config.json by entrypoint.sh: Cyrus
+  # watches this file and may rewrite it, which fails on a read-only mount.
+  config.json: |
+    {{- toPrettyJson .Values.config | nindent 4 }}
+{{- if .Values.scripts }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cyrus.fullname" . }}-scripts
+  labels:
+    {{- include "cyrus.labels" . | nindent 4 }}
+data:
+  {{- range $name, $content := .Values.scripts }}
+  {{ $name }}: |
+    {{- $content | nindent 4 }}
+  {{- end }}
+{{- end }}

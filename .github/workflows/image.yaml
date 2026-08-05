@@ -1,0 +1,196 @@
+---
+name: image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository }}
+
+# Least privilege at the workflow level; jobs widen only what they need.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Required for cosign keyless signing: the OIDC token IS the identity, so
+      # there is no private key to leak or rotate.
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: base
+            suffix: ''
+          - target: php
+            suffix: '-php'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          flavor: |
+            suffix=${{ matrix.suffix }},onlatest=true
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+            type=sha,format=short
+
+      # amd64 only: the php target builds against packages.sury.org, and an
+      # arm64 build under QEMU takes ~20 minutes for no current consumer.
+      # Add linux/arm64 here (and its mise checksum to the Dockerfile) if you
+      # run arm nodes.
+      # Build locally FIRST so the scan can actually gate. Scanning after the
+      # push means the vulnerable image is already public and already signed by
+      # the time the job goes red — a report, not a gate.
+      - name: Build for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: scan-target:${{ matrix.target }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+
+      # Runs on pull requests too, which is the point: catch it before merge.
+      - name: Scan image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: scan-target:${{ matrix.target }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+      # Second call is nearly free — every layer is in the gha cache.
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # SLSA provenance and an SBOM, attached as BuildKit in-toto
+          # attestations in the OCI index. Read them with
+          # `docker buildx imagetools inspect --format '{{ json .SBOM }}'` —
+          # they are not cosign-attached artifacts.
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.target }}
+
+      # Keyless signature bound to this workflow's OIDC identity. Verify with:
+      #   cosign verify ghcr.io/OWNER/cyrus-agent-k8s:TAG \
+      #     --certificate-identity-regexp '^https://github.com/OWNER/cyrus-agent-k8s/' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: Sign image
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${REGISTRY}/${IMAGE}@${DIGEST}"
+
+  chart:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@v4
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Lint
+        run: helm lint chart/cyrus --set cyrus.baseUrl=https://example.com
+
+      - name: Render
+        run: |
+          helm template cyrus chart/cyrus \
+            --set cyrus.baseUrl=https://example.com \
+            --set secrets.existingSecret=cyrus-secrets \
+            --set repositories.demo=https://github.com/acme/demo.git \
+            --set ingress.enabled=true \
+            --set ingress.host=cyrus.example.com \
+            --set ingress.tls.enabled=true \
+            --set ingress.tls.secretName=cyrus-tls \
+            > rendered.yaml
+
+      - name: Validate against Kubernetes schemas
+        run: |
+          curl -sSLo kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf kubeconform.tar.gz kubeconform
+          ./kubeconform -strict -summary -kubernetes-version 1.31.0 rendered.yaml
+
+      # A rendered chart that does not set CYRUS_HOST_EXTERNAL=true produces a
+      # pod nothing can reach, and the failure looks like a healthy start. Assert
+      # it so a future refactor cannot quietly drop it.
+      - name: Assert reachability invariant
+        run: |
+          grep -q 'CYRUS_HOST_EXTERNAL' rendered.yaml || {
+            echo "CYRUS_HOST_EXTERNAL missing from rendered output" >&2; exit 1; }
+          grep -A1 'name: CYRUS_HOST_EXTERNAL' rendered.yaml | grep -q '"true"' || {
+            echo "CYRUS_HOST_EXTERNAL is not \"true\"" >&2; exit 1; }
+
+      # The chart must not publish the config-mutation API to the internet.
+      - name: Assert ingress does not expose /api
+        run: |
+          if grep -qE 'path: /$' rendered.yaml; then
+            echo "ingress publishes / — that exposes /api/update/* and /mcp" >&2; exit 1
+          fi
+
+      # Prerelease tags (v0.1.0-rc.1) deliberately do NOT publish the chart:
+      # `helm package` takes its version from Chart.yaml, not from the git tag,
+      # so an rc tag would push a chart labelled 0.1.0 and the real v0.1.0
+      # would then overwrite it. A prerelease tag still exercises the whole
+      # image path — build, provenance, SBOM, cosign, Trivy — which is the
+      # point of cutting one before burning the real version on a workflow typo.
+      - name: Log in to GHCR
+        if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package, push and sign chart
+        if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')
+        run: |
+          helm package chart/cyrus --destination dist
+          pkg=$(ls dist/*.tgz)
+          out=$(helm push "$pkg" "oci://ghcr.io/${{ github.repository_owner }}/charts" 2>&1 | tee /dev/stderr)
+          digest=$(echo "$out" | awk '/Digest:/ {print $2}')
+          cosign sign --yes \
+            "ghcr.io/${{ github.repository_owner }}/charts/cyrus@${digest}"

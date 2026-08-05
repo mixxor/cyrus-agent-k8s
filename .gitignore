@@ -1,0 +1,9 @@
+.DS_Store
+*.tgz
+# The litellm dependency IS committed, on purpose. Argo CD and any other
+# GitOps renderer would otherwise have to resolve an OCI dependency at render
+# time — extra credentials, extra failure mode, for a 185K file. Vendoring it
+# keeps `helm template` working offline. Refresh with `helm dependency update`.
+!chart/cyrus/charts/*.tgz
+values.local.yaml
+secrets.local.yaml

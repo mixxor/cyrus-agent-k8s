@@ -1,0 +1,7 @@
+.git
+.github
+chart
+docs
+*.md
+!README.md
+.DS_Store

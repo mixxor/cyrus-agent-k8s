@@ -1,0 +1,84 @@
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "cyrus.fullname" . }}
+  labels:
+    {{- include "cyrus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "cyrus.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: {{ .Values.cyrus.serverPort }}
+          protocol: TCP
+      {{- with .Values.networkPolicy.ingressFromNamespaces }}
+      from:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      {{- end }}
+  egress:
+    # DNS. Kept as its own rule so the block list below cannot strip it: kube-dns
+    # lives inside the very ranges we are denying.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if .Values.networkPolicy.publicEgress.enabled }}
+    # The public internet, minus private space and the link-local range that
+    # fronts cloud metadata services. Note what this does NOT stop: on a managed
+    # cluster with a public control-plane endpoint the API server is reachable
+    # through 0.0.0.0/0:443 (automountServiceAccountToken: false is what covers
+    # that, not this rule), and the DNS rule above permits queries to any pod on
+    # 53, which kube-dns forwards — so DNS-tunnel exfiltration is not blocked.
+    # Set publicEgress.enabled: false and route through an allowlisting proxy if
+    # that matters to you.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            {{- with .Values.networkPolicy.blockedCIDRs }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.publicEgress.ports }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- if eq .Values.llm.mode "gateway" }}
+    {{- if .Values.litellm.enabled }}
+    # The bundled gateway sits in this namespace, inside the RFC1918 range the
+    # rule above denies. Without this the agent cannot reach its own model API.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: litellm
+      ports:
+        - port: 4000
+          protocol: TCP
+    {{- else }}
+    # An EXTERNAL gateway (llm.gateway.baseUrl) is almost certainly in RFC1918
+    # too, and this chart cannot guess its namespace or labels. Add an
+    # extraEgress rule reaching it, or the first session fails on a policy the
+    # renderer was perfectly happy with.
+    {{- if not .Values.networkPolicy.extraEgress }}
+    {{- fail "llm.mode=gateway with litellm.enabled=false requires networkPolicy.extraEgress to reach the external gateway (or networkPolicy.enabled=false)" }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+    {{- with .Values.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,33 @@
+---
+apiVersion: v2
+name: cyrus
+description: >-
+  Unofficial Kubernetes deployment for Cyrus, the AI coding agent for Linear,
+  GitHub, GitLab and Slack. Not affiliated with Cyrus Agents.
+type: application
+version: 0.1.0
+# The cyrus-ai npm version installed at container start. Overridable via
+# cyrus.version without rebuilding the image.
+appVersion: "0.2.67"
+home: https://github.com/mixxor/cyrus-agent-k8s
+sources:
+  - https://github.com/mixxor/cyrus-agent-k8s
+  - https://github.com/cyrusagents/cyrus
+keywords:
+  - cyrus
+  - ai-agent
+  - linear
+  - claude
+maintainers:
+  - name: mixxor
+    url: https://github.com/mixxor
+dependencies:
+  # Optional LLM gateway. Off by default — the chart works standalone, and a
+  # gateway is a real operational commitment (it wants a database). Turn it on
+  # when you want the model credential to live somewhere other than the agent's
+  # environment. See llm.mode in values.yaml.
+  - name: litellm-helm
+    alias: litellm
+    version: 1.95.0
+    repository: oci://ghcr.io/berriai
+    condition: litellm.enabled

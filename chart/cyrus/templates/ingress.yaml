@@ -1,0 +1,42 @@
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "cyrus.fullname" . }}
+  labels:
+    {{- include "cyrus.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ required "ingress.host is required when ingress is enabled" .Values.ingress.host | quote }}
+      secretName: {{ required "ingress.tls.secretName is required when TLS is enabled" .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ required "ingress.host is required when ingress is enabled" .Values.ingress.host | quote }}
+      http:
+        paths:
+          # Only the webhook endpoints are published. Cyrus serves more on this
+          # port than the outside world needs: /api/update/* rewrites config and
+          # env, /mcp/cyrus-tools is an MCP endpoint, /approval and /callback are
+          # local interaction surfaces. Those all fail closed without a
+          # configured API key, but publishing them buys nothing and widens the
+          # attack surface for free. Override ingress.paths to change this.
+          {{- range .Values.ingress.paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Exact" }}
+            backend:
+              service:
+                name: {{ include "cyrus.fullname" $ }}
+                port:
+                  name: http
+          {{- end }}
+{{- end }}

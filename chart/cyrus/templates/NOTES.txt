@@ -1,0 +1,35 @@
+Cyrus is starting as {{ include "cyrus.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+  cyrus-ai version : {{ .Values.cyrus.version }}
+  webhook endpoint : {{ .Values.cyrus.baseUrl }}/linear-webhook
+{{- if .Values.persistence.enabled }}
+  volume           : {{ .Values.persistence.size }} ({{ .Values.persistence.accessModes | join "," }})
+{{- else }}
+  volume           : DISABLED — repos, worktrees and the cyrus-ai install are
+                     lost on every restart. Set persistence.enabled=true.
+{{- end }}
+
+First boot installs cyrus-ai from npm and clones every configured repository,
+so the pod can take several minutes to pass its startup probe. Follow along:
+
+  kubectl -n {{ .Release.Namespace }} logs -f sts/{{ include "cyrus.fullname" . }}
+
+{{- if not .Values.secrets.existingSecret }}
+
+WARNING: secrets.existingSecret is unset. Cyrus has no Linear credentials and
+no model API credentials, and will not process anything. Create a Secret and
+set secrets.existingSecret to its name.
+{{- end }}
+{{- if not .Values.repositories }}
+
+WARNING: no repositories configured. Set `repositories` to a map of
+name -> https clone URL.
+{{- end }}
+{{- if and .Values.ingress.enabled (not .Values.ingress.tls.enabled) }}
+
+WARNING: ingress is enabled without TLS. Linear webhooks carry a signed
+payload over plain HTTP in this configuration. Enable ingress.tls.
+{{- end }}
+
+Point your Linear webhook at the endpoint above, then delegate an issue to the
+Cyrus agent user in Linear to start a session.

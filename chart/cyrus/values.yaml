@@ -1,0 +1,343 @@
+---
+# Default values for the cyrus chart.
+#
+# This chart is deliberately vendor-neutral: it consumes a plain Kubernetes
+# Secret via `secrets.existingSecret`. How that Secret gets created — kubectl,
+# External Secrets Operator, Sealed Secrets, Vault Agent, SOPS — is your call.
+
+image:
+  repository: ghcr.io/mixxor/cyrus-agent-k8s
+  # Use the `-php` suffixed tag for Laravel/Symfony repositories.
+  tag: ""  # defaults to .Chart.AppVersion-derived image tag; see _helpers.tpl
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+cyrus:
+  # npm version of cyrus-ai installed at container start. Not baked into the
+  # image, so bumping this is a pod restart, not an image rebuild.
+  # renovate: datasource=npm depName=cyrus-ai
+  version: "0.2.67"
+
+  # SRI hash of the cyrus-ai tarball, checked before install.
+  #
+  # ⚠ Scope: this pins ONE package. cyrus-ai has 17 direct dependencies, 11 of
+  # them caret ranges, and ~278 packages resolve by semver at container start —
+  # including the executable payloads that actually run your code (the Codex
+  # CLI, cloudflared, cursorsandbox, ripgrep). Pinning the top tarball while
+  # its closure floats is the same shape as signing an image and calling the
+  # supply chain solved. Use lockfileConfigMap below to close it properly.
+  #   npm view cyrus-ai@0.2.67 dist.integrity
+  integrity: "sha512-mQLx8mQTordnwiFrNK1E9XOKvhQwWIssjM9WrQIOMQHJnDOscx0FxeI9tfDHwq9yh1z4NKqF39SzTluO+GBT2A=="
+
+  # Name of an existing ConfigMap holding a `package-lock.json` key. When set,
+  # the entrypoint runs `npm ci` against it instead of `npm install`, so every
+  # package in the closure comes from the lockfile at its recorded integrity
+  # hash and nothing resolves at runtime. This is what makes the SBOM claim
+  # mean something at the layer where the binaries live.
+  #
+  # Generate one (~132K, 278 packages, fits a ConfigMap fine):
+  #   mkdir /tmp/lock && cd /tmp/lock
+  #   echo '{"name":"cyrus-runtime","version":"1.0.0","private":true,
+  #          "dependencies":{"cyrus-ai":"0.2.67"}}' > package.json
+  #   npm install --package-lock-only
+  #   kubectl create configmap cyrus-lockfile --from-file=package-lock.json
+  #
+  # Regenerate whenever you bump cyrus.version — a stale lockfile installs the
+  # old version regardless of what cyrus.version says.
+  lockfileConfigMap: ""
+
+  # Public HTTPS URL this instance is reachable on. Linear delivers webhooks to
+  # ${baseUrl}/linear-webhook. Required.
+  baseUrl: ""
+
+  serverPort: 3456
+
+  # Delete worktrees untouched for this many days on each pod start. 0 disables.
+  # Runs in the entrypoint rather than a CronJob because the volume is RWO.
+  worktreeMaxAgeDays: 7
+
+  # Cyrus validates webhook source IPs against each provider's published ranges,
+  # and turns this on automatically whenever CYRUS_HOST_EXTERNAL=true — which
+  # this chart always sets. Left unset here, so upstream's default applies.
+  #
+  # Behind an Ingress the pod sees the controller's address, not Linear's. This
+  # still works because Cyrus builds Fastify with `trustProxy: true` and reads
+  # `request.ip`, so the real client IP comes from X-Forwarded-For — which
+  # Traefik, ingress-nginx and friends set by default. Verify yours does.
+  #
+  # Set to false only if your ingress path genuinely cannot present the client
+  # IP. Prefer fixing the header (externalTrafficPolicy: Local, or PROXY
+  # protocol) over disabling the check.
+  #
+  # Note also that `trustProxy: true` trusts the leftmost X-Forwarded-For entry,
+  # which a caller can forge — treat this as defence in depth behind the
+  # webhook signature check, not as an authentication boundary.
+  webhookIpValidation: ""  # "" (upstream default) | "true" | "false"
+
+  # Cyrus can mirror session transcripts to app.atcyrus.com when CYRUS_API_KEY /
+  # CYRUS_APP_URL / CYRUS_TEAM_ID are configured, and reports errors to Sentry.
+  # Neither is on unless configured, but for a fully offline posture — and this
+  # chart's whole argument is about where data goes — pin them off explicitly.
+  disableRemoteSessionStore: true
+  disableSentry: true
+
+  # Git identity used for commits the agent makes.
+  gitAuthorName: Cyrus
+  gitAuthorEmail: cyrus@users.noreply.github.com
+
+  # Extra plain env vars. Never put credentials here — use secrets.existingSecret.
+  extraEnv: {}
+
+# Language toolchains installed into the volume at start with mise
+# (https://mise.jdx.dev), so one image serves many languages instead of a
+# published image per ecosystem. First boot pays the install cost; restarts
+# reuse the volume.
+#
+# Anything with a prebuilt release works well: node, python, go, ruby, java,
+# rust, bun, deno, terraform. Runtimes mise builds from source (PHP) are slow
+# enough that a purpose-built image tag is the better answer — that is what the
+# -php tag is for, and why deriving your own image is the documented path for
+# anything heavier.
+#   toolchains:
+#     - python@3.13
+#     - go@1.23
+toolchains: []
+
+# Repositories cloned into the volume on start, as name -> clone URL.
+# Credentials come from the token in the Secret, so use https:// URLs.
+#   repositories:
+#     my-app: https://github.com/acme/my-app.git
+repositories: {}
+
+# Rendered to ~/.cyrus/config.json. See
+# https://github.com/cyrusagents/cyrus/blob/main/docs/CONFIG_FILE.md
+#
+# The ConfigMap is the source of truth and is re-seeded on every pod start:
+# runtime edits made by cyrus-config-updater do not survive a restart.
+#
+# ⚠ REQUIRED for Linear, and not obvious: Cyrus has no environment variable for
+# the Linear token. It reads config.linearWorkspaces[<id>].linearToken, and a
+# repository without linearWorkspaceId throws "is not linked to a Linear
+# workspace" on every webhook — while the pod stays Ready and /version keeps
+# returning 200. A config without these two fields looks healthy and does
+# nothing.
+#
+# Reference credentials as ${VAR} and list the names in configSubstVars below;
+# they are substituted from the Secret at container start, so nothing secret
+# lands in the ConfigMap.
+#
+#   config:
+#     linearWorkspaces:
+#       "your-linear-workspace-id":
+#         linearToken: "${LINEAR_OAUTH_TOKEN}"
+#     repositories:
+#       - id: my-app
+#         name: my-app
+#         linearWorkspaceId: "your-linear-workspace-id"   # must match the key above
+#         ...
+config: {}
+
+# Variable names substituted into config.json at container start, from the
+# environment supplied by secrets.existingSecret. An allowlist, so a literal `$`
+# in a prompt template is left alone. A referenced-but-empty variable aborts
+# startup rather than silently producing an empty credential.
+configSubstVars:
+  - LINEAR_OAUTH_TOKEN
+  - LINEAR_REFRESH_TOKEN
+  - GITHUB_TOKEN
+  - GITLAB_ACCESS_TOKEN
+  - SLACK_BOT_TOKEN
+
+# Scripts mounted into ~/.cyrus/scripts/ and made executable. Reference one as
+# `global_setup_script` in config above to run it for every new worktree.
+#   scripts:
+#     worktree-setup.sh: |
+#       #!/usr/bin/env bash
+#       ...
+scripts: {}
+
+# How Cyrus authenticates to the model API. Three shapes, and the difference
+# that matters is *where the credential lives*, because the agent executes
+# model-generated shell commands and those inherit its environment.
+#
+#   subscription — CLAUDE_CODE_OAUTH_TOKEN in the pod, straight to Anthropic.
+#                  Cheapest. The token is readable by anything the agent runs.
+#   apiKey       — ANTHROPIC_API_KEY in the pod, straight to Anthropic. Same
+#                  exposure, but revoking one key is cheaper than re-running a
+#                  browser OAuth flow, and per-key spend is visible.
+#   gateway      — the real credential lives in an LLM gateway; the pod holds
+#                  only a virtual key. A leak costs you a revocable virtual key
+#                  and nothing else. Also where budgets and per-session audit
+#                  come from.
+#
+# Read SECURITY.md before choosing. None of the three stops an injected prompt
+# from reading what is in the environment — `gateway` changes what is worth
+# reading.
+llm:
+  mode: apiKey  # subscription | apiKey | gateway
+
+  gateway:
+    # Defaults to the bundled subchart's Service when litellm.enabled is true.
+    # Set explicitly to point at a gateway you already run.
+    baseUrl: ""
+    # Key in secrets.existingSecret holding the virtual key. Mapped to
+    # ANTHROPIC_AUTH_TOKEN, which is what the Claude Agent SDK reads.
+    virtualKeySecretKey: LITELLM_VIRTUAL_KEY
+
+# Bundled LiteLLM gateway. Off by default. Its own configuration — model list,
+# database, master key, budgets — lives under this key and is passed through to
+# the upstream chart verbatim; see
+# https://github.com/BerriAI/litellm/tree/main/deploy/charts/litellm-helm
+litellm:
+  enabled: false
+  # Minimum viable shape when you do enable it:
+  #
+  # environmentSecrets:
+  #   - litellm-secrets            # holds ANTHROPIC_API_KEY and PROXY_MASTER_KEY
+  # proxy_config:
+  #   model_list:
+  #     - model_name: claude
+  #       litellm_params:
+  #         model: anthropic/claude-opus-4-6
+  #         api_key: os.environ/ANTHROPIC_API_KEY
+  #   general_settings:
+  #     master_key: os.environ/PROXY_MASTER_KEY
+  # db:
+  #   deployStandalone: true       # virtual keys and budgets need a database
+
+secrets:
+  # Name of an existing Secret, mounted with envFrom. Expected keys depend on
+  # llm.mode:
+  #   subscription -> CLAUDE_CODE_OAUTH_TOKEN
+  #   apiKey       -> ANTHROPIC_API_KEY
+  #   gateway      -> LITELLM_VIRTUAL_KEY (and NOT ANTHROPIC_API_KEY — envFrom
+  #                   injects every key in the Secret, and a real key sitting
+  #                   next to the virtual one defeats the point)
+  # Plus, in every mode:
+  #   LINEAR_CLIENT_ID, LINEAR_CLIENT_SECRET, LINEAR_WEBHOOK_SECRET
+  #   LINEAR_OAUTH_TOKEN — ⚠ Cyrus does NOT read this. It is substituted into
+  #     config.json via configSubstVars; the name is this chart's convention.
+  #   GITHUB_TOKEN, GITHUB_WEBHOOK_SECRET
+  #     (or GITHUB_APP_ID + GITHUB_APP_INSTALLATION_ID)
+  #   GITLAB_ACCESS_TOKEN — what upstream reads. entrypoint.sh additionally
+  #     uses GITLAB_TOKEN for its own git credential helper, so set both if you
+  #     use GitLab: one authenticates git push, the other the integration.
+  #   GITLAB_WEBHOOK_SECRET
+  #   SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET
+  existingSecret: ""
+
+persistence:
+  enabled: true
+  # Holds the cyrus-ai install, cloned repos, one git worktree per issue, and
+  # the composer/npm caches. Worktrees of a dependency-heavy app run ~1Gi each.
+  size: 40Gi
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+
+service:
+  type: ClusterIP
+  port: 3456
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: ""
+  # Only the webhook endpoints are published by default. The same port also
+  # serves /api/update/* (rewrites config and env), /mcp/cyrus-tools, /approval
+  # and /callback. Those fail closed without a configured API key, but there is
+  # no reason to expose them to the internet. Replace this list with a single
+  # `- path: /` `pathType: Prefix` entry only if you know you need the rest.
+  paths:
+    - path: /linear-webhook
+      pathType: Exact
+    - path: /github-webhook
+      pathType: Exact
+    - path: /gitlab-webhook
+      pathType: Exact
+    - path: /slack-webhook
+      pathType: Exact
+  tls:
+    enabled: false
+    secretName: ""
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    # No CPU limit by default: the agent's builds and test runs are bursty, and
+    # throttling them lengthens every session. Set one if you need hard caps.
+    memory: 6Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  # All writes go to the volume or the /tmp emptyDir. Set false if a toolchain
+  # you add insists on writing elsewhere in the image.
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # The agent executes model-generated shell commands. It has no reason to hold
+  # a token for the cluster it runs in.
+  automountServiceAccountToken: false
+
+# Blocks the agent from reaching the cluster's own network and API server while
+# leaving public egress open. Requires a CNI that enforces NetworkPolicy.
+networkPolicy:
+  enabled: true
+  # The general egress rule. Set enabled: false to remove it entirely — that is
+  # what "deny direct egress, force everything through a proxy" actually
+  # requires. Emptying blockedCIDRs does the OPPOSITE: it deletes the `except`
+  # list and opens RFC1918 and the metadata endpoint.
+  publicEgress:
+    enabled: true
+    ports:
+      - 443
+      - 80
+      - 22
+  # Egress destinations denied even though they fall inside the allowed range.
+  blockedCIDRs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 169.254.0.0/16
+  # Additional egress rules appended verbatim, e.g. to reach an in-cluster
+  # database or registry that the blocks above would otherwise cut off.
+  extraEgress: []
+  # ⚠ Trap: setting this emits a `from:` with namespaceSelectors only, and
+  # kubelet probes arrive from the NODE ip, matching no selector. On a CNI that
+  # enforces this (Calico), the startup probe then fails and the pod never
+  # becomes ready. If you set it, add an ipBlock for your node CIDR too.
+  #
+  # Empty means no `from:` at all — which allows ingress from anywhere the
+  # cluster's routing permits, not merely "anywhere in-cluster". The port
+  # restriction (3456) and the fact that /api/update/* fails closed without an
+  # API key are what limit exposure here.
+  ingressFromNamespaces: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+priorityClassName: ""
+
+# Seconds given to an in-flight agent session to wind down on pod deletion.
+terminationGracePeriodSeconds: 60

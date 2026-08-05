@@ -1,0 +1,20 @@
+cyrus-agent-k8s
+Copyright 2026 Michael Raeck
+
+This work packages, but does not include or derive from, the Cyrus project
+(https://github.com/cyrusagents/cyrus), which is licensed under the Apache
+License, Version 2.0. No Cyrus source code is vendored here or baked into the
+published container images; `cyrus-ai` is installed from npm at runtime by the
+operator. (Note that upstream's package.json declares "MIT" while its bundled
+LICENSE file is Apache 2.0; this notice follows the LICENSE file.)
+
+cyrus-agent-k8s is an independent, unofficial packaging effort. It is not affiliated
+with, endorsed by, or supported by Cyrus Agents. "Cyrus" is used here solely to
+identify the software being packaged; the Apache License grants no trademark
+rights (Section 6).
+
+The published container images contain no Cyrus source code and no Anthropic
+source code. The `cyrus-ai` npm package and its `@anthropic-ai/claude-agent-sdk`
+dependency are installed at container start-time from the public npm registry,
+by the operator running the image. Use of that SDK is governed by Anthropic's
+Commercial Terms of Service (https://www.anthropic.com/legal/commercial-terms).
