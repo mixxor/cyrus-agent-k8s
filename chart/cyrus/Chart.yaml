@@ -5,10 +5,10 @@ description: >-
   Unofficial Kubernetes deployment for Cyrus, the AI coding agent for Linear,
   GitHub, GitLab and Slack. Not affiliated with Cyrus Agents.
 type: application
-version: 0.1.0
+version: 0.1.2
 # The cyrus-ai npm version installed at container start. Overridable via
 # cyrus.version without rebuilding the image.
-appVersion: "0.2.67"
+appVersion: "0.2.73"
 home: https://github.com/mixxor/cyrus-agent-k8s
 sources:
   - https://github.com/mixxor/cyrus-agent-k8s
