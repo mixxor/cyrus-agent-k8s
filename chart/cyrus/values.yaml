@@ -126,10 +126,16 @@ repositories: {}
 # they are substituted from the Secret at container start, so nothing secret
 # lands in the ConfigMap.
 #
+# ⚠ Linear access tokens expire after 24 hours. Without linearRefreshToken
+# Cyrus cannot renew them and stops reaching Linear a day after bootstrap. The
+# refresh token rotates on every use; the entrypoint keeps the pair Cyrus
+# persisted on the volume across restarts, as long as the Secret is unchanged.
+#
 #   config:
 #     linearWorkspaces:
 #       "your-linear-workspace-id":
 #         linearToken: "${LINEAR_OAUTH_TOKEN}"
+#         linearRefreshToken: "${LINEAR_REFRESH_TOKEN}"
 #     repositories:
 #       - id: my-app
 #         name: my-app

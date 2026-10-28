@@ -150,12 +150,16 @@ if [[ -f /config/config.json ]]; then
     #
     # envsubst is given an explicit allowlist rather than free rein, so a `$`
     # in a prompt template or setup script is left alone.
+    #
+    # Rendered to a side file first: the previous config.json is still needed
+    # below, to carry over the Linear tokens Cyrus rotated at runtime.
+    rendered="${CYRUS_HOME}/config.json.rendered"
     subst_vars="${CYRUS_CONFIG_SUBST_VARS:-}"
     if [[ -n "${subst_vars}" ]]; then
         shell_format=""
         for v in ${subst_vars}; do shell_format+="\${${v}}"; done
         log "rendering config.json (substituting: ${subst_vars})"
-        envsubst "${shell_format}" < /config/config.json > "${CYRUS_HOME}/config.json"
+        envsubst "${shell_format}" < /config/config.json > "${rendered}"
 
         # An unset variable expands to empty, which Cyrus accepts as a valid
         # string and then fails on at the first API call. Fail here instead.
@@ -168,8 +172,47 @@ if [[ -f /config/config.json ]]; then
         done
     else
         log "seeding config.json from ConfigMap"
-        cp /config/config.json "${CYRUS_HOME}/config.json"
+        cp /config/config.json "${rendered}"
     fi
+
+    # Linear OAuth access tokens live 24 hours, and every refresh ROTATES the
+    # refresh token as well (https://linear.app/developers/oauth-2-0-authentication).
+    # Cyrus refreshes on its own and writes the new pair into config.json — the
+    # very file this block replaces. Re-seeding the Secret's pair on every start
+    # would put back a refresh token Linear has already retired, and the pod
+    # would lose Linear access on the first restart after a refresh, while
+    # staying Ready and answering /version.
+    #
+    # So the pair Cyrus last persisted wins, as long as the Secret still holds
+    # the pair that was seeded before it. A changed Secret (a fresh bootstrap)
+    # wins over the volume: that is how an operator recovers from a dead token.
+    seed_marker="${CYRUS_HOME}/state/linear-token-seed.sha256"
+    seed_digest="$(jq -c '[(.linearWorkspaces // {}) | to_entries[]
+        | [.key, .value.linearToken, .value.linearRefreshToken]]' "${rendered}" \
+        | sha256sum | cut -d' ' -f1)"
+    if [[ -f "${CYRUS_HOME}/config.json" && -f "${seed_marker}" \
+          && "$(cat "${seed_marker}")" == "${seed_digest}" ]]; then
+        if jq --slurpfile prev "${CYRUS_HOME}/config.json" '
+                if .linearWorkspaces then
+                  .linearWorkspaces |= with_entries(
+                    .key as $id
+                    | ($prev[0].linearWorkspaces[$id] // {}) as $p
+                    | if ($p.linearToken // "") != "" and ($p.linearRefreshToken // "") != ""
+                      then .value.linearToken = $p.linearToken
+                         | .value.linearRefreshToken = $p.linearRefreshToken
+                      else . end)
+                else . end' "${rendered}" > "${rendered}.merged" 2>/dev/null; then
+            mv "${rendered}.merged" "${rendered}"
+            log "keeping the Linear tokens Cyrus persisted (Secret unchanged since they were seeded)"
+        else
+            rm -f "${rendered}.merged"
+            log "WARN: previous config.json unreadable — seeding Linear tokens from the Secret"
+        fi
+    else
+        log "seeding Linear tokens from the Secret"
+    fi
+    printf '%s\n' "${seed_digest}" > "${seed_marker}"
+    mv "${rendered}" "${CYRUS_HOME}/config.json"
     chmod 0600 "${CYRUS_HOME}/config.json"
 fi
 

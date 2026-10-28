@@ -80,6 +80,7 @@ kubectl -n cyrus create secret generic cyrus-secrets \
   --from-literal=LINEAR_CLIENT_SECRET=... \
   --from-literal=LINEAR_WEBHOOK_SECRET=... \
   --from-literal=LINEAR_OAUTH_TOKEN=... \
+  --from-literal=LINEAR_REFRESH_TOKEN=... \
   --from-literal=GITHUB_TOKEN=...
 
 helm install cyrus ./chart/cyrus -n cyrus -f my-values.yaml
@@ -113,11 +114,14 @@ config:
   # without linearWorkspaceId throws "is not linked to a Linear workspace" on
   # every webhook — while the pod stays Ready and /version returns 200.
   #
-  # ${LINEAR_OAUTH_TOKEN} is substituted from your Secret at container start
-  # (see configSubstVars), so no credential lands in the ConfigMap.
+  # ${LINEAR_OAUTH_TOKEN} and ${LINEAR_REFRESH_TOKEN} are substituted from your
+  # Secret at container start (see configSubstVars), so no credential lands in
+  # the ConfigMap. The refresh token is not optional: Linear access tokens
+  # expire after 24 hours, and without it Cyrus goes deaf a day after bootstrap.
   linearWorkspaces:
     "your-linear-workspace-id":
       linearToken: "${LINEAR_OAUTH_TOKEN}"
+      linearRefreshToken: "${LINEAR_REFRESH_TOKEN}"
   repositories:
     - id: my-app
       name: my-app
@@ -140,9 +144,19 @@ Then point your Linear webhook at `https://cyrus.example.com/linear-webhook`.
 
 Cyrus's setup flow is interactive by design — a browser OAuth round trip. Do it once on a laptop, then move the results into your secret store.
 
-1. Create a Linear OAuth application in your workspace settings. Note the client ID and secret, and set a webhook secret.
-2. Install Cyrus locally: `npm install -g cyrus-ai` and run `cyrus`. Complete the Linear OAuth flow in the browser.
-3. Read `~/.cyrus/config.json`. You need two things from it: the **workspace ID** (the key under `linearWorkspaces`) and its **`linearToken`**. The workspace ID is not a secret and goes in your values; the token goes in the Secret under the key `LINEAR_OAUTH_TOKEN`.
+1. Create a Linear OAuth application in your workspace settings. Note the client ID and secret, and set a webhook secret. Add `http://localhost:3456/callback` as a callback URL — the laptop flow below redirects there.
+2. Run the flow against a throwaway home, so nothing touches a real `~/.cyrus`:
+
+   ```bash
+   B="$(mktemp -d)" && echo '{"repositories":[]}' > "$B/config.json"
+   LINEAR_CLIENT_ID=... LINEAR_CLIENT_SECRET=... CYRUS_BASE_URL=http://localhost:3456 \
+     npx -y cyrus-ai@0.2.67 --cyrus-home "$B" self-auth-linear
+   ```
+
+   Complete the Linear OAuth flow in the browser.
+3. Read `$B/config.json`. You need three things from it: the **workspace ID** (the key under `linearWorkspaces`), its **`linearToken`** and its **`linearRefreshToken`**. The workspace ID is not a secret and goes in your values; the tokens go in the Secret under the keys `LINEAR_OAUTH_TOKEN` and `LINEAR_REFRESH_TOKEN`.
+
+   Linear access tokens live 24 hours and every refresh rotates the refresh token too. Cyrus refreshes on its own and persists the new pair into `config.json` on the volume; the entrypoint keeps that pair across restarts for as long as the Secret still holds the pair it seeded. Updating the Secret (a fresh bootstrap) overrides the volume — that is the recovery path for a dead token. Do not copy the rotated tokens back into your secret store by hand.
 
    That env var name is this chart's convention, **not** something Cyrus reads — upstream has no environment variable for the Linear token at all. The chart substitutes it into `config.json` at container start so the credential never has to sit in a ConfigMap. If you reference `${LINEAR_OAUTH_TOKEN}` in `config` and the Secret key is missing or empty, the entrypoint aborts rather than starting an agent that cannot talk to Linear.
 4. For the model credential, either an `ANTHROPIC_API_KEY` (fully headless, metered) or a `CLAUDE_CODE_OAUTH_TOKEN` from a subscription plan. The latter is cheaper at volume but is generated interactively and **expires** — plan for a refresh, and monitor for it, because an expired token fails quietly at the next session rather than at startup.
