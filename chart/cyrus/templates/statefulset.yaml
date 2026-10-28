@@ -169,13 +169,21 @@ spec:
           # Deliberately slack. /version shares an event loop with N concurrent
           # agent sessions, so a busy pod can stall it; a tight liveness probe
           # would restart the pod and destroy every worktree in flight to fix a
-          # problem that was not there. 10 × 30s before that happens.
+          # problem that was not there.
+          #
+          # Hard floor: Cyrus runs global_setup_script through execSync
+          # (cyrus-edge-worker GitService.runHookScriptInherited), which blocks
+          # the event loop — /version included — for up to SETUP_TIMEOUT_MS,
+          # hard-coded to 5 minutes. A budget of exactly 10 × 30s = 5 min killed
+          # the pod at the same moment the setup timed out. 14 × 30s = 7 min
+          # leaves margin; never go below 5 min plus a probe period or two.
           livenessProbe:
             httpGet:
               path: /version
               port: http
             periodSeconds: 30
-            failureThreshold: 10
+            timeoutSeconds: 5
+            failureThreshold: 14
           readinessProbe:
             httpGet:
               path: /version
