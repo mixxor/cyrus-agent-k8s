@@ -43,7 +43,11 @@ Each of these looks healthy while doing nothing:
   whole server meanwhile. Liveness tolerates 7 minutes so the pod is not killed mid-setup.
 - **Rollouts killing sessions.** Cyrus does not resume an interrupted session, so any restart loses the work in
   flight. A `preStop` hook waits while `GET /status` reports `busy` (up to `drain.timeoutSeconds`, 45 min) before
-  SIGTERM; the terminating pod already receives no new webhooks.
+  SIGTERM. Webhooks do not get through meanwhile, see "Known limits".
+- **OOM taking every session down.** One container holds all sessions, and on cgroup v2 an OOM kills all of it.
+  `config.maxConcurrentSessions` (upstream, default here 3) queues the rest; size it to the memory limit.
+- **Worktree pruning.** Worktrees in which nothing changed for `cyrus.worktreeMaxAgeDays` are removed at start,
+  never with uncommitted changes.
 
 ## Quick start
 
@@ -182,8 +186,9 @@ model and git tokens in its environment. The controls that hold are outside the 
 
 - no ServiceAccount token, no RBAC; read-only root filesystem, uid 1000, no capabilities, `RuntimeDefault` seccomp
 - NetworkPolicy: DNS plus public 80/443/22, RFC1918 and `169.254.0.0/16` denied (needs a CNI that enforces it)
-- Ingress publishes only the webhook paths, not `/api/update/*` or `/mcp`
-- `llm.mode: gateway` keeps the real model credential out of the pod (`subscription` and `apiKey` do not)
+- Ingress publishes only `/linear-webhook`, not `/api/update/*` or `/mcp`
+- `llm.mode: gateway` keeps the real model credential out of the pod (`subscription` and `apiKey` do not); the pod
+  refuses to start if `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` is in its Secret anyway
 
 ## Operations
 
@@ -198,11 +203,15 @@ model and git tokens in its environment. The controls that hold are outside the 
 
 ## Known limits
 
-- One replica (RWO volume, one webhook consumer). Several repositories: one Helm release, Linear app and git token
-  per repository.
+- One replica (RWO volume, one webhook consumer). Several repositories: one Helm release, Linear app, git token and
+  ingress host per repository.
+- No webhook receiver during a rollout. The new pod starts only once the old one has drained. Linear retries a
+  failed delivery after 1 min, 1 h and 6 h, so anything sent mid-drain arrives up to an hour late. Roll out when
+  the agent is idle, or lower `drain.timeoutSeconds`.
+- Sessions queued behind `config.maxConcurrentSessions` live in memory, do not count as `busy` for the drain, and
+  are lost on restart.
 - `config.json` is re-seeded from the ConfigMap on every start; runtime edits are lost (Linear tokens excepted).
-- amd64 only. Worktrees older than `cyrus.worktreeMaxAgeDays` are pruned at start, not on a schedule.
-- Concurrency is unbounded: one session per delegated issue, in parallel.
+- amd64 only. Worktrees are pruned at start, not on a schedule.
 - Only the Claude runner and the Linear transport are exercised here. Codex/Cursor/Gemini runners and the
   GitHub/GitLab/Slack transports are untested; upstream's own sandbox does not get user namespaces under this
   pod security context.

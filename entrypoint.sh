@@ -28,12 +28,33 @@ mkdir -p \
     "${CYRUS_HOME}/worktrees" \
     "${CYRUS_HOME}/playwright"
 
+# --- 0. credential custody ---------------------------------------------------
+#
+# llm.mode=gateway exists to keep the real model credential out of this pod.
+# envFrom injects every key of secrets.existingSecret, so a real key sitting
+# next to the virtual one lands in the agent's environment anyway. The chart
+# cannot see the Secret's keys at render time (`lookup` returns nothing under
+# `helm template` and Argo CD), so it is checked here.
+
+if [[ "${CYRUS_LLM_MODE:-}" == "gateway" ]]; then
+    for v in ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN; do
+        if [[ -n "${!v:-}" ]]; then
+            log "FATAL: llm.mode is gateway, but ${v} is in the environment."
+            log "       Remove it from secrets.existingSecret: envFrom hands every key to the agent."
+            exit 1
+        fi
+    done
+fi
+
 # --- 1. install cyrus-ai (idempotent, version-stamped, integrity-checked) -----
 #
 # A version pin says "whatever the registry serves under 0.2.67". CYRUS_INTEGRITY
 # pins the bytes: the tarball's advertised SRI hash is compared against the
 # expected one, and then against the tarball actually downloaded, before
-# anything is unpacked or executed.
+# anything is unpacked or executed. npm then installs that very file, not a
+# second download.
+
+tarball=/tmp/cyrus-ai.tgz
 
 verify_integrity() {
     local version="$1" expected="$2"
@@ -52,11 +73,11 @@ verify_integrity() {
         return 1
     fi
 
-    curl -fsSL "${url}" -o /tmp/cyrus-ai.tgz
-    actual="sha512-$(openssl dgst -sha512 -binary /tmp/cyrus-ai.tgz | openssl base64 -A)"
-    rm -f /tmp/cyrus-ai.tgz
+    curl -fsSL "${url}" -o "${tarball}"
+    actual="sha512-$(openssl dgst -sha512 -binary "${tarball}" | openssl base64 -A)"
 
     if [[ "${actual}" != "${expected}" ]]; then
+        rm -f "${tarball}"
         log "FATAL: downloaded tarball hashes to ${actual}, expected ${expected}"
         return 1
     fi
@@ -98,8 +119,10 @@ if [[ ! -f "${marker}" ]]; then
     else
         if [[ -n "${CYRUS_INTEGRITY:-}" ]]; then
             verify_integrity "${CYRUS_VERSION}" "${CYRUS_INTEGRITY}"
+            pkg="${tarball}"
         else
             log "WARN: CYRUS_INTEGRITY unset — installing whatever the registry serves for ${CYRUS_VERSION}"
+            pkg="cyrus-ai@${CYRUS_VERSION}"
         fi
         # Scope warning, so nobody mistakes this for a pinned closure: the
         # integrity hash covers the cyrus-ai tarball only. 11 of its 17 direct
@@ -107,7 +130,8 @@ if [[ ! -f "${marker}" ]]; then
         # semver at this moment. Set cyrus.lockfileConfigMap to close that.
         log "WARN: transitive dependencies resolve by semver — only the cyrus-ai tarball is pinned"
         log "installing cyrus-ai@${CYRUS_VERSION} into ${NPM_CONFIG_PREFIX}"
-        npm install -g --no-fund --no-audit "cyrus-ai@${CYRUS_VERSION}"
+        npm install -g --no-fund --no-audit "${pkg}"
+        rm -f "${tarball}"
     fi
     rm -f "${NPM_CONFIG_PREFIX}"/.cyrus-installed-* "${CYRUS_HOME}"/app/.cyrus-installed-*
     mkdir -p "$(dirname "${marker}")"
@@ -227,8 +251,9 @@ git config --global user.name  "${GIT_AUTHOR_NAME:-Cyrus Agent}"
 git config --global user.email "${GIT_AUTHOR_EMAIL:-cyrus-agent@example.invalid}"
 git config --global init.defaultBranch main
 # Worktrees live outside the repo dir; without this git refuses to operate on
-# them when uid/gid ownership differs after a volume restore.
-git config --global --add safe.directory '*'
+# them when uid/gid ownership differs after a volume restore. --replace-all,
+# not --add: the gitconfig is on the volume, and --add appended a line per start.
+git config --global --replace-all safe.directory '*'
 
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     export GH_TOKEN="${GITHUB_TOKEN}"
@@ -279,17 +304,41 @@ if [[ ! "${CYRUS_WORKTREE_MAX_AGE_DAYS:-0}" =~ ^[0-9]+$ ]]; then
     CYRUS_WORKTREE_MAX_AGE_DAYS=0
 fi
 
+# Worktrees are found through git, not by directory depth. Cyrus puts one at
+# <workspaceBaseDir>/<ISSUE-ID> (GitService.createSingleRepoWorktree): depth 2
+# under ~/.cyrus/worktrees with a per-repo workspaceBaseDir, depth 1 with
+# self-add-repo's default, where a fixed-depth find deleted directories INSIDE
+# live worktrees. Only worktrees under ~/.cyrus/worktrees and
+# ~/.cyrus/workspaces are candidates (upstream default and hand-set configs).
+#
+# "Untouched" means no entry in the worktree or its git metadata is newer than
+# the cut-off. The worktree root's own mtime does not move when the agent edits
+# app/Http/..., so it alone made an issue worked on for a week look abandoned.
+#
+# `git worktree remove` without --force refuses modified or untracked files,
+# so uncommitted work is never deleted; ignored files (vendor/, node_modules/)
+# do not count. Committed work lives on the branch in the main repository.
 if [[ "${CYRUS_WORKTREE_MAX_AGE_DAYS:-0}" -gt 0 ]]; then
-    log "pruning worktrees older than ${CYRUS_WORKTREE_MAX_AGE_DAYS} days"
-    # Both paths: upstream's default is ~/.cyrus/worktrees (Application.js,
-    # CYRUS_WORKTREES_DIR), while a config that sets workspaceBaseDir by hand
-    # may use ~/.cyrus/workspaces. Pruning only the latter made a default-on
-    # feature a silent no-op for anyone who used self-add-repo.
-    find "${CYRUS_HOME}/worktrees" "${CYRUS_HOME}/workspaces" \
-        -mindepth 2 -maxdepth 2 -type d \
-        -mtime "+${CYRUS_WORKTREE_MAX_AGE_DAYS}" -exec rm -rf {} + 2>/dev/null || true
+    days="${CYRUS_WORKTREE_MAX_AGE_DAYS}"
+    log "pruning clean worktrees untouched for more than ${days} days"
     for repo in "${CYRUS_HOME}"/repos/*/; do
-        [[ -d "${repo}/.git" ]] && git -C "${repo}" worktree prune || true
+        [[ -d "${repo}/.git" ]] || continue
+        git -C "${repo}" worktree prune || true
+        while IFS= read -r wt; do
+            case "${wt}" in
+                "${CYRUS_HOME}/worktrees/"* | "${CYRUS_HOME}/workspaces/"*) ;;
+                *) continue ;;
+            esac
+            gitdir="$(git -C "${wt}" rev-parse --absolute-git-dir 2>/dev/null)" || continue
+            if [[ -n "$(find "${wt}" "${gitdir}" ! -mtime "+${days}" -print -quit 2>/dev/null)" ]]; then
+                continue
+            fi
+            if git -C "${repo}" worktree remove "${wt}" 2>/dev/null; then
+                log "removed stale worktree ${wt}"
+            else
+                log "WARN: keeping stale worktree ${wt}: uncommitted changes, or locked"
+            fi
+        done < <(git -C "${repo}" worktree list --porcelain | sed -n 's/^worktree //p')
     done
 fi
 

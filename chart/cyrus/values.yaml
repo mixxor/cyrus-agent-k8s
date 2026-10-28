@@ -52,8 +52,9 @@ cyrus:
 
   serverPort: 3456
 
-  # Delete worktrees untouched for this many days on each pod start. 0 disables.
-  # Runs in the entrypoint rather than a CronJob because the volume is RWO.
+  # On each pod start, remove worktrees in which nothing changed for this many
+  # days. Worktrees with uncommitted changes are kept. 0 disables. Runs in the
+  # entrypoint rather than a CronJob because the volume is RWO.
   worktreeMaxAgeDays: 7
 
   # Cyrus validates webhook source IPs against each provider's published ranges,
@@ -155,7 +156,14 @@ repositories: {}
 #         name: my-app
 #         linearWorkspaceId: "your-linear-workspace-id"   # must match the key above
 #         ...
-config: {}
+config:
+  # Upstream cap on agent sessions running at once; further sessions wait in an
+  # in-memory FIFO queue. Without it every delegated issue runs in parallel,
+  # each with its own composer/npm/Chromium/test processes, all inside one
+  # memory limit. On cgroup v2 nodes the kubelet (1.28+) OOM-kills the whole
+  # container, Cyrus included, so one overrun ends every running session.
+  # Size it to resources.limits.memory; null removes the cap.
+  maxConcurrentSessions: 3
 
 # Variable names substituted into config.json at container start, from the
 # environment supplied by secrets.existingSecret. An allowlist, so a literal `$`
@@ -243,9 +251,9 @@ secrets:
   # llm.mode:
   #   subscription -> CLAUDE_CODE_OAUTH_TOKEN
   #   apiKey       -> ANTHROPIC_API_KEY
-  #   gateway      -> LITELLM_VIRTUAL_KEY (and NOT ANTHROPIC_API_KEY — envFrom
-  #                   injects every key in the Secret, and a real key sitting
-  #                   next to the virtual one defeats the point)
+  #   gateway      -> LITELLM_VIRTUAL_KEY, and neither ANTHROPIC_API_KEY nor
+  #                   CLAUDE_CODE_OAUTH_TOKEN: envFrom injects every key in the
+  #                   Secret, so the pod refuses to start if either is there
   # Plus, in every mode:
   #   LINEAR_CLIENT_ID, LINEAR_CLIENT_SECRET, LINEAR_WEBHOOK_SECRET
   #   LINEAR_OAUTH_TOKEN — ⚠ Cyrus does NOT read this. It is substituted into
@@ -279,19 +287,15 @@ ingress:
   annotations: {}
   # cert-manager.io/cluster-issuer: letsencrypt-prod
   host: ""
-  # Only the webhook endpoints are published by default. The same port also
-  # serves /api/update/* (rewrites config and env), /mcp/cyrus-tools, /approval
-  # and /callback. Those fail closed without a configured API key, but there is
-  # no reason to expose them to the internet. Replace this list with a single
-  # `- path: /` `pathType: Prefix` entry only if you know you need the rest.
+  # Only the Linear webhook is published by default; add /github-webhook,
+  # /gitlab-webhook or /slack-webhook (Exact) if you use those transports. The
+  # same port also serves /api/update/* (rewrites config and env),
+  # /mcp/cyrus-tools, /approval and /callback. Those fail closed without a
+  # configured API key, but there is no reason to expose them to the internet.
+  # Replace this list with a single `- path: /` `pathType: Prefix` entry only
+  # if you know you need the rest.
   paths:
     - path: /linear-webhook
-      pathType: Exact
-    - path: /github-webhook
-      pathType: Exact
-    - path: /gitlab-webhook
-      pathType: Exact
-    - path: /slack-webhook
       pathType: Exact
   tls:
     enabled: false
@@ -381,10 +385,16 @@ terminationGracePeriodSeconds: 60
 # chart bump or node drain kills whatever the agent is doing mid-task.
 # On termination a preStop hook polls GET /status (busy while a webhook is
 # processed or any runner runs) and lets SIGTERM through once it reads "idle",
-# or after timeoutSeconds. A terminating pod is already out of the Service, so
-# no new sessions start meanwhile; Linear retries the deliveries against the
-# new pod. A session waiting on an AskUserQuestion answer counts as busy and
-# holds the rollout until it is answered or the timeout hits.
+# or after timeoutSeconds. A session waiting on an AskUserQuestion answer
+# counts as busy and holds the rollout until it is answered or the timeout hits.
+#
+# The cost: with one replica and an RWO volume the new pod starts only after
+# the old one is gone, and a terminating pod is out of the Service. For the
+# whole drain no webhook gets through. Linear retries a failed delivery after
+# 1 min, 1 h and 6 h, then gives up (and may disable the webhook), so a
+# delegation or thread reply sent mid-drain arrives up to an hour late, and
+# Linear shows the session as unresponsive meanwhile. Sessions queued behind
+# config.maxConcurrentSessions are not "busy": they live in memory and are lost.
 drain:
   enabled: true
   timeoutSeconds: 2700

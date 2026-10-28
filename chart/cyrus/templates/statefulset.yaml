@@ -133,6 +133,10 @@ spec:
             - name: CYRUS_CONFIG_SUBST_VARS
               value: {{ join " " . | quote }}
             {{- end }}
+            # entrypoint.sh refuses to start in gateway mode if a real model
+            # credential arrived via envFrom anyway.
+            - name: CYRUS_LLM_MODE
+              value: {{ .Values.llm.mode | quote }}
             {{- if eq .Values.llm.mode "gateway" }}
             # The Claude Agent SDK reads these two. Pointing it at the gateway
             # means the pod never sees the real Anthropic credential — a stolen

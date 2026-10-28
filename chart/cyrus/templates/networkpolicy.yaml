@@ -61,10 +61,13 @@ spec:
     {{- if .Values.litellm.enabled }}
     # The bundled gateway sits in this namespace, inside the RFC1918 range the
     # rule above denies. Without this the agent cannot reach its own model API.
+    # The instance label scopes it to this release's gateway, not every LiteLLM
+    # in the namespace.
     - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: litellm
+              app.kubernetes.io/instance: {{ .Release.Name }}
       ports:
         - port: 4000
           protocol: TCP

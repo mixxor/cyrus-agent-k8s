@@ -185,7 +185,10 @@ enable the bundled LiteLLM dependency or point `llm.gateway.baseUrl` at one you
 already run. The gateway holds the real Anthropic credential; the pod holds a
 virtual key. A stolen virtual key works only from inside your cluster, and you
 revoke it without touching the real one. This is the single highest-value change
-if you run Cyrus on repos that matter.
+if you run Cyrus on repos that matter. Keep the real key out of
+`secrets.existingSecret` too: `envFrom` injects every key, so in gateway mode
+the entrypoint refuses to start if `ANTHROPIC_API_KEY` or
+`CLAUDE_CODE_OAUTH_TOKEN` is present.
 
 Two things to be clear about:
 
@@ -197,10 +200,10 @@ Two things to be clear about:
   ([BerriAI/litellm#29190](https://github.com/BerriAI/litellm/issues/29190)) —
   use an API key at the gateway if custody is the goal.
 - **"One pod, so one seat" does not quite hold.** Cyrus creates a worktree and an
-  agent session per delegated issue and runs them concurrently; there is no
-  documented maximum. So a single pod is not equivalent to a single person using
-  Claude Code — it is one process driving N concurrent sessions, and N is set by
-  how fast your team delegates issues. That matters both for how you size the pod
+  agent session per delegated issue and runs them concurrently, up to
+  `config.maxConcurrentSessions` (3 by default in this chart). So a single pod is
+  not equivalent to a single person using Claude Code — it is one process driving
+  N concurrent sessions. That matters both for how you size the pod
   and for whether a per-seat subscription is the honest licence for it. Not legal
   advice; just do not reason from "it is only one pod".
 
