@@ -26,8 +26,8 @@ cyrus:
   # CLI, cloudflared, cursorsandbox, ripgrep). Pinning the top tarball while
   # its closure floats is the same shape as signing an image and calling the
   # supply chain solved. Use lockfileConfigMap below to close it properly.
-  #   npm view cyrus-ai@0.2.67 dist.integrity
-  integrity: "sha512-mQLx8mQTordnwiFrNK1E9XOKvhQwWIssjM9WrQIOMQHJnDOscx0FxeI9tfDHwq9yh1z4NKqF39SzTluO+GBT2A=="
+  #   npm view cyrus-ai@0.2.73 dist.integrity
+  integrity: "sha512-zfnzFEX3i01ZtDvyGgbgoZP9MPwor+NEMcMUNw7QRRUPYT38/K4HzA9XliDf0qzuH0l6m51lfS0di1rZ3fYK9A=="
 
   # Name of an existing ConfigMap holding a `package-lock.json` key. When set,
   # the entrypoint runs `npm ci` against it instead of `npm install`, so every
