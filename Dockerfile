@@ -23,7 +23,7 @@
 # "reproducible" and "whatever :2.8 means today" are different things.
 # Renovate keeps these current.
 # renovate: datasource=docker depName=node versioning=docker
-ARG NODE_IMAGE=node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03
+ARG NODE_IMAGE=node:24-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c
 # renovate: datasource=docker depName=composer versioning=docker
 ARG COMPOSER_IMAGE=composer:2.8@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd62ac72a02577c
 
@@ -105,6 +105,30 @@ RUN set -eux; \
     groupmod -n cyrus node; \
     mkdir -p /home/cyrus/.cyrus /home/cyrus/.config; \
     chown -R 1000:1000 /home/cyrus
+
+# npm's own vendored dependencies, patched in place. The npm that ships with
+# node 24.22.1 (11.19.1) bundles undici 6.28.0 — used only by node-gyp to
+# download Node headers, and affected by a TLS certificate-validation bypass
+# (CVE-2026-109383) plus three DoS CVEs — and brace-expansion 5.0.9 (two DoS
+# CVEs). Not even npm 12.2.1 carries the fixed undici (6.29.1). Both
+# replacements are drop-in within the ranges npm declares (node-gyp: undici
+# ^6.25.0; minimatch: brace-expansion ^5.0.5, whose balanced-match ^4.0.2 is
+# already bundled). Drop this step once a node image ships an npm with both.
+# After the usermod step: npm must not create /home/cyrus before it runs, so
+# its cache goes to /tmp and is removed again.
+RUN set -eux; \
+    cd /usr/local/lib/node_modules/npm/node_modules; \
+    for spec in undici@6.29.1 brace-expansion@5.0.12; do \
+        name="${spec%@*}"; \
+        tgz="$(NPM_CONFIG_CACHE=/tmp/npm-cache npm pack "${spec}" --silent)"; \
+        rm -rf "${name}"; \
+        mkdir "${name}"; \
+        tar -xzf "${tgz}" -C "${name}" --strip-components=1 --no-same-owner; \
+        rm -f "${tgz}"; \
+    done; \
+    rm -rf /tmp/npm-cache; \
+    node -e 'require("/usr/local/lib/node_modules/npm/node_modules/undici"); require("/usr/local/lib/node_modules/npm/node_modules/minimatch")'; \
+    npm --version
 
 # mise, verified against a pinned checksum rather than piped from a shell script.
 RUN set -eux; \
