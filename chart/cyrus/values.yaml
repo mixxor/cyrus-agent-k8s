@@ -92,9 +92,12 @@ cyrus:
   disableRemoteSessionStore: true
   disableSentry: true
 
-  # Git identity used for commits the agent makes.
-  gitAuthorName: Cyrus
-  gitAuthorEmail: cyrus@users.noreply.github.com
+  # Git identity used for commits the agent makes. Never use
+  # <name>@users.noreply.github.com: that is a real GitHub user's address
+  # ("cyrus" is taken) and GitHub attributes the commits to them. Use an
+  # address on a domain you control, or keep this unverifiable default.
+  gitAuthorName: Cyrus Agent
+  gitAuthorEmail: cyrus-agent@example.invalid
 
   # Extra plain env vars. Never put credentials here — use secrets.existingSecret.
   extraEnv: {}

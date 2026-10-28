@@ -223,8 +223,8 @@ fi
 
 # --- 3. git / gh credentials -------------------------------------------------
 
-git config --global user.name  "${GIT_AUTHOR_NAME:-Cyrus}"
-git config --global user.email "${GIT_AUTHOR_EMAIL:-cyrus@users.noreply.github.com}"
+git config --global user.name  "${GIT_AUTHOR_NAME:-Cyrus Agent}"
+git config --global user.email "${GIT_AUTHOR_EMAIL:-cyrus-agent@example.invalid}"
 git config --global init.defaultBranch main
 # Worktrees live outside the repo dir; without this git refuses to operate on
 # them when uid/gid ownership differs after a volume restore.
