@@ -373,4 +373,19 @@ podLabels: {}
 priorityClassName: ""
 
 # Seconds given to an in-flight agent session to wind down on pod deletion.
+# With drain.enabled the effective grace period is drain.timeoutSeconds + this.
 terminationGracePeriodSeconds: 60
+
+# Let running sessions finish before the pod stops. Cyrus does not resume an
+# interrupted session after a restart, so without this every config change,
+# chart bump or node drain kills whatever the agent is doing mid-task.
+# On termination a preStop hook polls GET /status (busy while a webhook is
+# processed or any runner runs) and lets SIGTERM through once it reads "idle",
+# or after timeoutSeconds. A terminating pod is already out of the Service, so
+# no new sessions start meanwhile; Linear retries the deliveries against the
+# new pod. A session waiting on an AskUserQuestion answer counts as busy and
+# holds the rollout until it is answered or the timeout hits.
+drain:
+  enabled: true
+  timeoutSeconds: 2700
+  pollSeconds: 10

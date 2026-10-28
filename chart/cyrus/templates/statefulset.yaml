@@ -28,7 +28,11 @@ spec:
     spec:
       serviceAccountName: {{ include "cyrus.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- if .Values.drain.enabled }}
+      terminationGracePeriodSeconds: {{ add (int .Values.drain.timeoutSeconds) (int .Values.terminationGracePeriodSeconds) }}
+      {{- else }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- end }}
       {{- with .Values.priorityClassName }}
       priorityClassName: {{ . }}
       {{- end }}
@@ -48,6 +52,27 @@ spec:
             - name: http
               containerPort: {{ .Values.cyrus.serverPort }}
               protocol: TCP
+          {{- if .Values.drain.enabled }}
+          # Wait for running agent sessions before SIGTERM (see drain in values.yaml).
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    end=$(( $(date +%s) + {{ int .Values.drain.timeoutSeconds }} ))
+                    while [ "$(date +%s)" -lt "$end" ]; do
+                      # Wait only while Cyrus explicitly says "busy". No answer
+                      # (crashed, not started) means nothing to protect.
+                      s=$(curl -fsS -m 5 http://127.0.0.1:{{ .Values.cyrus.serverPort }}/status 2>/dev/null) || exit 0
+                      case "$s" in
+                        *'"busy"'*) sleep {{ int .Values.drain.pollSeconds }} ;;
+                        *) exit 0 ;;
+                      esac
+                    done
+                    exit 0
+          {{- end }}
           env:
             # Not optional, and not a preference. Cyrus binds to `localhost`
             # unless this is exactly "true" (WorkerService.js: isExternalHost

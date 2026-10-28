@@ -41,6 +41,9 @@ Each of these looks healthy while doing nothing:
   "Forbidden: updates to statefulset spec". Asserted in CI.
 - **Blocking setup.** Cyrus runs `global_setup_script` through `execSync` with a hard 5-minute limit, freezing the
   whole server meanwhile. Liveness tolerates 7 minutes so the pod is not killed mid-setup.
+- **Rollouts killing sessions.** Cyrus does not resume an interrupted session, so any restart loses the work in
+  flight. A `preStop` hook waits while `GET /status` reports `busy` (up to `drain.timeoutSeconds`, 45 min) before
+  SIGTERM; the terminating pod already receives no new webhooks.
 
 ## Quick start
 
