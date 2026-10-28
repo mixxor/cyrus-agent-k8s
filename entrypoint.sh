@@ -318,9 +318,34 @@ fi
 # `git worktree remove` without --force refuses modified or untracked files,
 # so uncommitted work is never deleted; ignored files (vendor/, node_modules/)
 # do not count. Committed work lives on the branch in the main repository.
+#
+# Two layouts leave folders git does not track, swept by age afterwards:
+# multi-repo issues get <base>/<ISSUE-ID>/<repo> worktrees under a plain
+# <ISSUE-ID> parent, and an issue with no repository (or a repository whose
+# `git worktree add` failed) gets a plain <base>/<ISSUE-ID> directory.
 if [[ "${CYRUS_WORKTREE_MAX_AGE_DAYS:-0}" -gt 0 ]]; then
     days="${CYRUS_WORKTREE_MAX_AGE_DAYS}"
     log "pruning clean worktrees untouched for more than ${days} days"
+
+    # Workspace bases, i.e. the directories Cyrus creates <ISSUE-ID> folders
+    # in: both roots, plus every configured workspaceBaseDir under one of them
+    # (resolved the way upstream's resolvePath does).
+    bases=("${CYRUS_HOME}/worktrees" "${CYRUS_HOME}/workspaces")
+    while IFS= read -r b; do
+        [[ -n "${b}" ]] || continue
+        # shellcheck disable=SC2088  # deliberate: a literal "~/" from config.json
+        [[ "${b}" == "~/"* ]] && b="${HOME}/${b#"~/"}"
+        b="$(realpath -m "${b}")" || continue
+        case "${b}" in
+            "${CYRUS_HOME}/worktrees/"* | "${CYRUS_HOME}/workspaces/"*) bases+=("${b}") ;;
+        esac
+    done < <(jq -r '.repositories[]?.workspaceBaseDir // empty' "${CYRUS_HOME}/config.json" 2>/dev/null)
+    is_base() {
+        local b
+        for b in "${bases[@]}"; do [[ "$1" == "${b}" ]] && return 0; done
+        return 1
+    }
+
     for repo in "${CYRUS_HOME}"/repos/*/; do
         [[ -d "${repo}/.git" ]] || continue
         git -C "${repo}" worktree prune || true
@@ -335,10 +360,33 @@ if [[ "${CYRUS_WORKTREE_MAX_AGE_DAYS:-0}" -gt 0 ]]; then
             fi
             if git -C "${repo}" worktree remove "${wt}" 2>/dev/null; then
                 log "removed stale worktree ${wt}"
+                # Multi-repo <ISSUE-ID> parent: gone with its last worktree.
+                # rmdir, so a parent still holding a kept worktree stays.
+                is_base "${wt%/*}" || rmdir "${wt%/*}" 2>/dev/null || true
             else
                 log "WARN: keeping stale worktree ${wt}: uncommitted changes, or locked"
             fi
         done < <(git -C "${repo}" worktree list --porcelain | sed -n 's/^worktree //p')
+    done
+
+    # Plain <ISSUE-ID> folders. Nothing in them can be committed, so age alone
+    # decides. A .git entry at any depth means a worktree, or a parent of one:
+    # that is the loop above's business, never an rm -rf.
+    for base in "${bases[@]}"; do
+        for d in "${base}"/*/; do
+            d="${d%/}"
+            [[ -d "${d}" && ! -L "${d}" ]] || continue
+            is_base "${d}" && continue
+            [[ -z "$(find "${d}" -name .git -print -quit 2>/dev/null)" ]] || continue
+            [[ -z "$(find "${d}" ! -mtime "+${days}" -print -quit 2>/dev/null)" ]] || continue
+            # Never fatal: set -e would turn one undeletable file (a read-only
+            # Go module cache, say) into a crash-looping pod.
+            if rm -rf -- "${d}" 2>/dev/null; then
+                log "removed stale workspace ${d}"
+            else
+                log "WARN: could not fully remove stale workspace ${d}"
+            fi
+        done
     done
 fi
 

@@ -53,8 +53,9 @@ cyrus:
   serverPort: 3456
 
   # On each pod start, remove worktrees in which nothing changed for this many
-  # days. Worktrees with uncommitted changes are kept. 0 disables. Runs in the
-  # entrypoint rather than a CronJob because the volume is RWO.
+  # days. Worktrees with uncommitted changes are kept. Workspace folders git does
+  # not track (issues with no repository) go by age alone. 0 disables. Runs in
+  # the entrypoint rather than a CronJob because the volume is RWO.
   worktreeMaxAgeDays: 7
 
   # Cyrus validates webhook source IPs against each provider's published ranges,
