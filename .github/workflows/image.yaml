@@ -82,8 +82,10 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
 
       # Runs on pull requests too, which is the point: catch it before merge.
+      # Pinned by commit: upstream has dropped un-prefixed tags like 0.28.0
+      # before, which failed every build at "Set up job".
       - name: Scan image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: scan-target:${{ matrix.target }}
           severity: HIGH,CRITICAL
