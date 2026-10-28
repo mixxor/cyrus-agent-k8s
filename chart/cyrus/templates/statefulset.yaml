@@ -210,11 +210,19 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
   {{- if .Values.persistence.enabled }}
+  # volumeClaimTemplates are immutable once the StatefulSet exists. Selector
+  # labels only: cyrus.labels carries the chart version and cyrus.version, and a
+  # bump of either would make every later apply fail with "Forbidden: updates to
+  # statefulset spec for fields other than ...". apiVersion, kind and status are
+  # the values the API server fills in anyway; rendering them keeps Argo CD from
+  # reporting the StatefulSet OutOfSync for ever.
   volumeClaimTemplates:
-    - metadata:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: data
         labels:
-          {{- include "cyrus.labels" . | nindent 10 }}
+          {{- include "cyrus.selectorLabels" . | nindent 10 }}
       spec:
         accessModes:
           {{- toYaml .Values.persistence.accessModes | nindent 10 }}
@@ -224,4 +232,7 @@ spec:
         resources:
           requests:
             storage: {{ .Values.persistence.size }}
+        volumeMode: Filesystem
+      status:
+        phase: Pending
   {{- end }}

@@ -173,6 +173,24 @@ jobs:
             echo "ingress publishes / — that exposes /api/update/* and /mcp" >&2; exit 1
           fi
 
+      # volumeClaimTemplates are immutable on a live StatefulSet. If they vary
+      # with cyrus.version or the chart version, the first Renovate bump makes
+      # every apply fail with "Forbidden: updates to statefulset spec".
+      - name: Assert volumeClaimTemplates do not depend on versions
+        run: |
+          vct() {
+            helm template cyrus chart/cyrus --set cyrus.baseUrl=https://example.com "$@" \
+              | yq 'select(.kind == "StatefulSet") | .spec.volumeClaimTemplates'
+          }
+          a="$(vct --set cyrus.version=0.0.1)"
+          b="$(vct --set cyrus.version=9.9.9)"
+          [ -n "$a" ] && [ "$a" = "$b" ] || {
+            echo "volumeClaimTemplates change with cyrus.version:" >&2
+            diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") >&2; exit 1; }
+          if printf '%s\n' "$a" | grep -qE 'helm.sh/chart|app.kubernetes.io/version'; then
+            echo "volumeClaimTemplates carry a version label" >&2; exit 1
+          fi
+
       # Prerelease tags (v0.1.0-rc.1) deliberately do NOT publish the chart:
       # `helm package` takes its version from Chart.yaml, not from the git tag,
       # so an rc tag would push a chart labelled 0.1.0 and the real v0.1.0
