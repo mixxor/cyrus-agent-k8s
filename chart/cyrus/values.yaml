@@ -316,6 +316,11 @@ podSecurityContext:
   runAsUser: 1000
   runAsGroup: 1000
   fsGroup: 1000
+  # Without it the kubelet chowns every file on the volume at each mount: ~500k
+  # files (repos, worktrees, vendor/, node_modules/) took over a minute per
+  # restart, all of it time in which Linear webhooks fail. Everything on the
+  # volume is written by uid 1000 anyway; only a wrong root triggers a chown.
+  fsGroupChangePolicy: OnRootMismatch
   seccompProfile:
     type: RuntimeDefault
 
