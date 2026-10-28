@@ -173,6 +173,13 @@ jobs:
             echo "ingress publishes / — that exposes /api/update/* and /mcp" >&2; exit 1
           fi
 
+      # Without it upstream runs in proxy mode and answers every webhook Linear
+      # sends directly with 401, while the pod looks perfectly healthy.
+      - name: Assert direct Linear webhook verification
+        run: |
+          grep -A1 'name: LINEAR_DIRECT_WEBHOOKS' rendered.yaml | grep -q '"true"' || {
+            echo "LINEAR_DIRECT_WEBHOOKS=\"true\" missing from rendered output" >&2; exit 1; }
+
       # volumeClaimTemplates are immutable on a live StatefulSet. If they vary
       # with cyrus.version or the chart version, the first Renovate bump makes
       # every apply fail with "Forbidden: updates to statefulset spec".

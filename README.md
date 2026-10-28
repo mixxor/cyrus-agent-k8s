@@ -373,6 +373,7 @@ Two things the chart cannot do for you:
 | `cyrus.version` | `0.2.67` | npm version installed at start |
 | `cyrus.integrity` | pinned | SRI hash of the tarball; install refuses on mismatch |
 | `cyrus.baseUrl` | — | **required**; Linear posts to `${baseUrl}/linear-webhook` |
+| `cyrus.linearWebhookMode` | `direct` | `direct` verifies Linear's signature (`LINEAR_DIRECT_WEBHOOKS=true`); upstream's `proxy` default 401s every self-hosted delivery |
 | `cyrus.worktreeMaxAgeDays` | `7` | pruned on pod start; `0` disables |
 | `toolchains` | `[]` | mise toolchains installed into the volume, e.g. `python@3.13` |
 | `repositories` | `{}` | `name: https clone URL` |
@@ -402,6 +403,9 @@ but Cyrus builds Fastify with `trustProxy: true` and reads `request.ip`, so the 
 before assuming it. `cyrus.webhookIpValidation: "false"` is the escape hatch, and fixing the header
 (`externalTrafficPolicy: Local`, or PROXY protocol) is the better fix. Since `trustProxy: true` trusts the
 leftmost XFF entry, treat this as defence in depth behind the webhook signature, not as authentication.
+Both checks — signature and source IP — run only in direct mode (`cyrus.linearWebhookMode: direct`, the chart
+default). Upstream's own default is proxy mode, which expects the hosted relay's `Bearer $CYRUS_API_KEY` instead and
+answers every delivery straight from Linear with 401.
 
 ## Upstream's own sandbox
 

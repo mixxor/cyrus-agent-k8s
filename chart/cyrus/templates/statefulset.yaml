@@ -78,6 +78,12 @@ spec:
             - name: WEBHOOK_IP_VALIDATION
               value: {{ . | quote }}
             {{- end }}
+            {{- if eq .Values.cyrus.linearWebhookMode "direct" }}
+            - name: LINEAR_DIRECT_WEBHOOKS
+              value: "true"
+            {{- else if ne .Values.cyrus.linearWebhookMode "proxy" }}
+            {{- fail "cyrus.linearWebhookMode must be \"direct\" or \"proxy\"" }}
+            {{- end }}
             {{- if .Values.cyrus.disableRemoteSessionStore }}
             - name: CYRUS_DISABLE_REMOTE_SESSION_STORE
               value: "1"

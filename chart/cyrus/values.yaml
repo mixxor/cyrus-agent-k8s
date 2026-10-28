@@ -74,6 +74,17 @@ cyrus:
   # webhook signature check, not as an authentication boundary.
   webhookIpValidation: ""  # "" (upstream default) | "true" | "false"
 
+  # How /linear-webhook authenticates deliveries. Upstream defaults to "proxy":
+  # it expects deliveries relayed by Cyrus's hosted service, authenticated with
+  # `Authorization: Bearer $CYRUS_API_KEY`, and does NOT check Linear's
+  # signature. A self-hosted install receives webhooks straight from Linear,
+  # which sends no such header — so in proxy mode every delivery is answered
+  # 401 "Missing Authorization header" while the pod stays Ready and /version
+  # keeps returning 200. "direct" sets LINEAR_DIRECT_WEBHOOKS=true: deliveries
+  # are verified against LINEAR_WEBHOOK_SECRET and Linear's source IPs (above).
+  # Use "proxy" only together with the hosted relay and a CYRUS_API_KEY.
+  linearWebhookMode: direct  # direct | proxy
+
   # Cyrus can mirror session transcripts to app.atcyrus.com when CYRUS_API_KEY /
   # CYRUS_APP_URL / CYRUS_TEAM_ID are configured, and reports errors to Sentry.
   # Neither is on unless configured, but for a fully offline posture — and this
