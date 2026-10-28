@@ -16,7 +16,7 @@ cyrus:
   # npm version of cyrus-ai installed at container start. Not baked into the
   # image, so bumping this is a pod restart, not an image rebuild.
   # renovate: datasource=npm depName=cyrus-ai
-  version: "0.2.67"
+  version: "0.2.73"
 
   # SRI hash of the cyrus-ai tarball, checked before install.
   #
