@@ -1,0 +1,101 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "labels": [
+    "renovate"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Dockerfile ARGs carrying a '# renovate:' annotation. Docker ones are switched off below: the built-in dockerfile manager already follows ARG defaults used in FROM (tag + digest), so matching them here too would open a second PR per image.",
+      "managerFilePatterns": [
+        "/(^|/)Dockerfile$/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?\\s+ARG\\s+\\w+=(?<currentValue>\\S+)"
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver-coerced{{/if}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Chart values carrying a '# renovate:' annotation on the line above the key.",
+      "managerFilePatterns": [
+        "/^chart/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+\\w+:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Docker images in the Dockerfile belong to the built-in dockerfile manager; the regex manager above would duplicate them.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Base images: the image workflow's Trivy gate runs on the PR, so digest and patch/minor bumps of the same tag line merge on green. Majors (node 24 -> 26) stay manual.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "patch",
+        "minor"
+      ],
+      "automerge": true
+    },
+    {
+      "description": "GitHub Actions: pinned by digest; non-major updates merge on green.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "patch",
+        "minor",
+        "pinDigest"
+      ],
+      "automerge": true
+    },
+    {
+      "description": "cyrus-ai: the version must move with cyrus.integrity, which Renovate cannot compute. Never automerged; a release must age before it is proposed, since the closure runs agent code with repo write access.",
+      "matchPackageNames": [
+        "cyrus-ai"
+      ],
+      "automerge": false,
+      "minimumReleaseAge": "3 days",
+      "prBodyNotes": [
+        "⚠ Before merging, set `cyrus.integrity` in `chart/cyrus/values.yaml` in this PR: `npm view cyrus-ai@{{{newVersion}}} dist.integrity`. Without it the entrypoint stops at start (FATAL: registry metadata ... advertises integrity). If you use `cyrus.lockfileConfigMap`, regenerate the lockfile too."
+      ]
+    },
+    {
+      "description": "mise: the Dockerfile verifies the tarball against MISE_SHA256_amd64, which Renovate cannot compute. The build fails closed until it is updated.",
+      "matchPackageNames": [
+        "jdx/mise"
+      ],
+      "automerge": false,
+      "prBodyNotes": [
+        "⚠ Before merging, update `MISE_SHA256_amd64` in the Dockerfile in this PR: `curl -fsSL https://github.com/jdx/mise/releases/download/{{{newVersion}}}/mise-{{{newVersion}}}-linux-x64.tar.gz | sha256sum`. Without it the image build fails at `sha256sum -c`."
+      ]
+    },
+    {
+      "description": "litellm subchart is vendored under chart/cyrus/charts so Argo CD needs no OCI credentials; update the archive with the lock. Off by default in the chart, so never automerged.",
+      "matchManagers": [
+        "helmv3"
+      ],
+      "postUpdateOptions": [
+        "helmUpdateSubChartArchives"
+      ],
+      "automerge": false
+    }
+  ]
+}
