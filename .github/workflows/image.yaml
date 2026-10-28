@@ -212,6 +212,17 @@ jobs:
             echo "volumeClaimTemplates carry a version label" >&2; exit 1
           fi
 
+      # `helm package` takes the version from Chart.yaml, not from the tag, and
+      # the default image tag is v<chart version>. A tag cut without the bump
+      # republishes the previous chart, pointing at the previous image.
+      - name: Assert Chart.yaml version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          chart="v$(yq '.version' chart/cyrus/Chart.yaml)"
+          tag="${GITHUB_REF_NAME%%-*}"
+          [ "$chart" = "$tag" ] || {
+            echo "tag ${GITHUB_REF_NAME} but chart/cyrus/Chart.yaml says ${chart}" >&2; exit 1; }
+
       # Prerelease tags (v0.1.0-rc.1) deliberately do NOT publish the chart:
       # `helm package` takes its version from Chart.yaml, not from the git tag,
       # so an rc tag would push a chart labelled 0.1.0 and the real v0.1.0
@@ -235,3 +246,139 @@ jobs:
           digest=$(echo "$out" | awk '/Digest:/ {print $2}')
           cosign sign --yes \
             "ghcr.io/${{ github.repository_owner }}/charts/cyrus@${digest}"
+
+  # The assertions above read rendered YAML. This one runs it: the chart in
+  # kind, with the image built from this commit and placeholder credentials
+  # (Cyrus starts and serves without valid ones, which is why a wrong one looks
+  # healthy). Nothing here reaches Linear or Anthropic.
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NS: cyrus
+      POD: cyrus-0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          target: base
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: cyrus-smoke:ci
+          cache-from: type=gha,scope=base
+
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: smoke
+
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+
+      # --wait returns once the readiness probe passes. The kubelet probes the
+      # pod IP, so that alone proves Cyrus did not bind to localhost.
+      - name: Install chart
+        run: |
+          kind load docker-image cyrus-smoke:ci --name smoke
+          kubectl create namespace "$NS"
+          kubectl -n "$NS" create secret generic cyrus-secrets \
+            --from-literal=CLAUDE_CODE_OAUTH_TOKEN=smoke \
+            --from-literal=LINEAR_CLIENT_ID=smoke \
+            --from-literal=LINEAR_CLIENT_SECRET=smoke \
+            --from-literal=LINEAR_WEBHOOK_SECRET=smoke-webhook-secret \
+            --from-literal=LINEAR_OAUTH_TOKEN=smoke \
+            --from-literal=LINEAR_REFRESH_TOKEN=smoke
+          cat > smoke-values.yaml <<'VALUES'
+          image:
+            repository: cyrus-smoke
+            tag: ci
+            pullPolicy: Never
+          cyrus:
+            baseUrl: https://cyrus.example.invalid
+          secrets:
+            existingSecret: cyrus-secrets
+          persistence:
+            size: 1Gi
+          VALUES
+          helm install cyrus chart/cyrus -n "$NS" -f smoke-values.yaml --wait --timeout 10m
+
+      # The entrypoint installed cyrus-ai from npm, checked against
+      # cyrus.integrity, before the server could answer at all.
+      - name: Assert the pinned cyrus-ai version is serving
+        run: |
+          want="$(yq '.cyrus.version' chart/cyrus/values.yaml)"
+          got="$(kubectl -n "$NS" exec "$POD" -- curl -fsS http://127.0.0.1:3456/version | jq -r .cyrus_cli_version)"
+          [ "$got" = "$want" ] || { echo "serving cyrus-ai ${got}, chart pins ${want}" >&2; exit 1; }
+          kubectl -n "$NS" exec "$POD" -- curl -fsS http://127.0.0.1:3456/status | grep -q '"idle"' || {
+            echo "/status is not idle on a fresh pod" >&2; exit 1; }
+
+      # Proxy mode would answer 401 "Missing Authorization header". Direct mode
+      # checks the source IP first, and 127.0.0.1 is not Linear.
+      - name: Assert webhooks from outside Linear's IP ranges are refused
+        run: |
+          code="$(kubectl -n "$NS" exec "$POD" -- curl -s -o /dev/null -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data '{}' http://127.0.0.1:3456/linear-webhook)"
+          [ "$code" = 403 ] || { echo "expected 403 from the IP check, got ${code}" >&2; exit 1; }
+
+      # Seeded so the restart below has something to prune: an issue folder
+      # git does not track, untouched for 30 days, and a fresh one.
+      - name: Seed workspaces
+        run: |
+          # shellcheck disable=SC2016  # expanded by the pod's shell, not the runner's
+          kubectl -n "$NS" exec "$POD" -- sh -c '
+            w=$CYRUS_HOME/worktrees
+            mkdir -p "$w/SMOKE-1/notes" "$w/SMOKE-2"
+            echo old > "$w/SMOKE-1/notes/a"; echo new > "$w/SMOKE-2/a"
+            find "$w/SMOKE-1" -exec touch -d "30 days ago" {} +'
+
+      # Rolls the pod. The preStop hook waits only while /status says "busy",
+      # so an idle pod must go at once, not after drain.timeoutSeconds (45 min).
+      - name: Restart with IP validation off; idle drain must not block
+        run: |
+          before="$(kubectl -n "$NS" get pod "$POD" -o jsonpath='{.metadata.uid}')"
+          start=$(date +%s)
+          helm upgrade cyrus chart/cyrus -n "$NS" -f smoke-values.yaml \
+            --set-string cyrus.webhookIpValidation=false --wait --timeout 5m
+          after="$(kubectl -n "$NS" get pod "$POD" -o jsonpath='{.metadata.uid}')"
+          echo "rollout took $(( $(date +%s) - start ))s"
+          [ "$before" != "$after" ] || { echo "pod was not replaced" >&2; exit 1; }
+
+      - name: Assert the restart pruned only the stale workspace
+        run: |
+          # shellcheck disable=SC2016  # expanded by the pod's shell, not the runner's
+          kubectl -n "$NS" exec "$POD" -- sh -c '
+            w=$CYRUS_HOME/worktrees
+            [ ! -e "$w/SMOKE-1" ] || { echo "stale SMOKE-1 was kept" >&2; exit 1; }
+            [ -f "$w/SMOKE-2/a" ] || { echo "fresh SMOKE-2 was removed" >&2; exit 1; }'
+
+      # Webhook signature: HMAC-SHA256 of the raw body with LINEAR_WEBHOOK_SECRET,
+      # hex, in the linear-signature header. The 200 proves the secret travels
+      # from the Secret into config.json; the 401s that nothing else gets in.
+      - name: Assert webhook signature verification
+        run: |
+          post() {
+            kubectl -n "$NS" exec "$POD" -- curl -s -o /dev/null -w '%{http_code}' -X POST \
+              -H 'Content-Type: application/json' "$@" http://127.0.0.1:3456/linear-webhook
+          }
+          body='{"type":"Smoke","action":"ping"}'
+          sig="$(printf '%s' "$body" | openssl dgst -sha256 -hmac smoke-webhook-secret -hex | awk '{print $NF}')"
+          bad="$(printf '%s' "$body" | openssl dgst -sha256 -hmac wrong -hex | awk '{print $NF}')"
+          a="$(post --data "$body")"
+          b="$(post -H "linear-signature: ${bad}" --data "$body")"
+          c="$(post -H "linear-signature: ${sig}" --data "$body")"
+          echo "unsigned=${a} wrong-key=${b} signed=${c}"
+          [ "$a" = 401 ] && [ "$b" = 401 ] && [ "$c" = 200 ]
+
+      - name: Pod state and logs
+        if: always()
+        run: |
+          kubectl -n "$NS" get pods,pvc -o wide || true
+          kubectl -n "$NS" describe pod "$POD" | tail -40 || true
+          kubectl -n "$NS" logs "$POD" --tail=200 || true
+          kubectl -n "$NS" logs "$POD" --previous --tail=100 2>/dev/null || true

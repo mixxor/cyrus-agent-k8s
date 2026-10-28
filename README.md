@@ -47,7 +47,13 @@ Each of these looks healthy while doing nothing:
 - **OOM taking every session down.** One container holds all sessions, and on cgroup v2 an OOM kills all of it.
   `config.maxConcurrentSessions` (upstream, default here 3) queues the rest; size it to the memory limit.
 - **Worktree pruning.** Worktrees in which nothing changed for `cyrus.worktreeMaxAgeDays` are removed at start,
-  never with uncommitted changes.
+  never with uncommitted changes. A multi-repo issue folder goes with its last worktree; folders git does not
+  track (issues with no repository) go by age alone.
+
+Besides the render assertions, CI installs the chart into kind with the image from the same commit and checks the
+running pod: the pinned cyrus-ai serves, `/linear-webhook` refuses foreign IPs, unsigned and wrongly signed
+deliveries and accepts a correctly signed one, an idle pod's drain does not hold a restart, and the restart prunes
+a stale workspace.
 
 ## Quick start
 
