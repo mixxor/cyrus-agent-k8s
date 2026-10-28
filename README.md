@@ -379,6 +379,7 @@ Two things the chart cannot do for you:
 | `repositories` | `{}` | `name: https clone URL` |
 | `ingress.paths` | webhooks only | do not widen to `/` without reading SECURITY.md |
 | `config` | `{}` | rendered verbatim to `~/.cyrus/config.json` |
+| `claudeMd` | `""` | user-level `CLAUDE.md` for every session (`$CLAUDE_CONFIG_DIR/CLAUDE.md`); reaches @mention and label-routed sessions, which `appendInstruction` does not |
 | `scripts` | `{}` | mounted to `~/.cyrus/scripts/`, made executable |
 | `secrets.existingSecret` | `""` | mounted with `envFrom` |
 | `persistence.size` | `40Gi` | repos + one worktree per issue + caches |

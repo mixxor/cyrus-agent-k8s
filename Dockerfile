@@ -55,6 +55,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     XDG_CONFIG_HOME=/home/cyrus/.config \
     XDG_CACHE_HOME=/home/cyrus/.cyrus/cache \
     XDG_STATE_HOME=/home/cyrus/.cyrus/state \
+    XDG_DATA_HOME=/home/cyrus/.cyrus/share \
     CHROME_BIN=/usr/bin/chromium \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     PUPPETEER_SKIP_DOWNLOAD=true \

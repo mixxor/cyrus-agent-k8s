@@ -180,6 +180,20 @@ jobs:
           grep -A1 'name: LINEAR_DIRECT_WEBHOOKS' rendered.yaml | grep -q '"true"' || {
             echo "LINEAR_DIRECT_WEBHOOKS=\"true\" missing from rendered output" >&2; exit 1; }
 
+      # Renovate bumps cyrus.version but cannot compute cyrus.integrity. A
+      # mismatched pair renders fine and then crash-loops every pod on
+      # "FATAL: registry metadata ... advertises integrity" (Renovate PR #2 did
+      # exactly that). Fail the PR instead, with the value to paste.
+      - name: Assert cyrus.integrity matches cyrus.version
+        run: |
+          version="$(yq '.cyrus.version' chart/cyrus/values.yaml)"
+          pinned="$(yq '.cyrus.integrity' chart/cyrus/values.yaml)"
+          published="$(npm view "cyrus-ai@${version}" dist.integrity)"
+          [ -n "$published" ] && [ "$pinned" = "$published" ] || {
+            echo "cyrus.integrity does not belong to cyrus-ai@${version}." >&2
+            echo "Set chart/cyrus/values.yaml cyrus.integrity to: ${published:-<version not on npm>}" >&2
+            exit 1; }
+
       # volumeClaimTemplates are immutable on a live StatefulSet. If they vary
       # with cyrus.version or the chart version, the first Renovate bump makes
       # every apply fail with "Forbidden: updates to statefulset spec".

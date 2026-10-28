@@ -176,6 +176,19 @@ configSubstVars:
 #       ...
 scripts: {}
 
+# User-level CLAUDE.md, loaded by every agent session. Cyrus starts Claude Code
+# with settingSources ["user", "project", "local"], and the image points
+# CLAUDE_CONFIG_DIR at ~/.cyrus/claude, so this lands at
+# ~/.cyrus/claude/CLAUDE.md (read-only mount; edits roll the pod).
+#
+# Prefer this over config.repositories[].appendInstruction for anything every
+# session must know: upstream appends that only in some prompt builders (not
+# for @mentions or label-routed issues in 0.2.67), so it silently goes missing.
+#   claudeMd: |
+#     # Rules for this agent
+#     - Run the test suite before pushing.
+claudeMd: ""
+
 # How Cyrus authenticates to the model API. Three shapes, and the difference
 # that matters is *where the credential lives*, because the agent executes
 # model-generated shell commands and those inherit its environment.

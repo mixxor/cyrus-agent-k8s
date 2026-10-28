@@ -10,6 +10,11 @@ data:
   # watches this file and may rewrite it, which fails on a read-only mount.
   config.json: |
     {{- toPrettyJson .Values.config | nindent 4 }}
+  {{- with .Values.claudeMd }}
+  # Mounted read-only as $CLAUDE_CONFIG_DIR/CLAUDE.md (see statefulset.yaml).
+  CLAUDE.md: |
+    {{- . | nindent 4 }}
+  {{- end }}
 {{- if .Values.scripts }}
 ---
 apiVersion: v1

@@ -136,6 +136,17 @@ spec:
               mountPath: /config/config.json
               subPath: config.json
               readOnly: true
+            {{- if .Values.claudeMd }}
+            # User-level memory for every Claude session: Cyrus starts Claude
+            # Code with settingSources ["user", "project", "local"], and the
+            # image sets CLAUDE_CONFIG_DIR=/home/cyrus/.cyrus/claude. A subPath
+            # mount does not follow ConfigMap edits, but checksum/config rolls
+            # the pod whenever this content changes.
+            - name: config
+              mountPath: /home/cyrus/.cyrus/claude/CLAUDE.md
+              subPath: CLAUDE.md
+              readOnly: true
+            {{- end }}
             {{- if .Values.scripts }}
             - name: scripts
               mountPath: /config/scripts
