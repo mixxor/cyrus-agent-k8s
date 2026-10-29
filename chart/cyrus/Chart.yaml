@@ -28,6 +28,6 @@ dependencies:
   # environment. See llm.mode in values.yaml.
   - name: litellm-helm
     alias: litellm
-    version: 1.95.0
+    version: 1.106.6
     repository: oci://ghcr.io/berriai
     condition: litellm.enabled
