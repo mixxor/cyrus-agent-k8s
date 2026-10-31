@@ -36,7 +36,7 @@ FROM ${NODE_IMAGE} AS base
 
 ARG TARGETARCH
 # renovate: datasource=github-releases depName=jdx/mise
-ARG MISE_VERSION=v2026.8.2
+ARG MISE_VERSION=v2026.10.25
 ARG MISE_SHA256_amd64=febda574ac4e036bf91e1ef9d33ec5e24dbfad6839eb0defa6abc12125186b74
 
 ENV DEBIAN_FRONTEND=noninteractive \
