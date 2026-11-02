@@ -25,7 +25,7 @@
 # renovate: datasource=docker depName=node versioning=docker
 ARG NODE_IMAGE=node:26-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9
 # renovate: datasource=docker depName=composer versioning=docker
-ARG COMPOSER_IMAGE=composer:2.10@sha256:b6dcd72ca98fa19d0e5b8476de179859704891fad06dd9e0b96833d4c430a5fc
+ARG COMPOSER_IMAGE=composer:2.10@sha256:2cf275428757e5435a667bfc0d038b14520ca02be2b1b70d44a05c8c19e2de48
 
 # `COPY --from` does not expand variables, so the pinned composer image needs a
 # named stage to be referenced from.
