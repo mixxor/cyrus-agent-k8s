@@ -23,7 +23,7 @@
 # "reproducible" and "whatever :2.8 means today" are different things.
 # Renovate keeps these current.
 # renovate: datasource=docker depName=node versioning=docker
-ARG NODE_IMAGE=node:26-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9
+ARG NODE_IMAGE=node:26-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68
 # renovate: datasource=docker depName=composer versioning=docker
 ARG COMPOSER_IMAGE=composer:2.11@sha256:5190d9b445add2fa26090108273cb1ef1e1af98175201c737b85b3c4f90fbf7c
 
