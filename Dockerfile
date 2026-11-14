@@ -37,7 +37,7 @@ FROM ${NODE_IMAGE} AS base
 ARG TARGETARCH
 # renovate: datasource=github-releases depName=jdx/mise
 ARG MISE_VERSION=v2026.11.8
-ARG MISE_SHA256_amd64=febda574ac4e036bf91e1ef9d33ec5e24dbfad6839eb0defa6abc12125186b74
+ARG MISE_SHA256_amd64=d2d5a46f507bba772686e2c8f2316b3a4439dac49a37a30db5c0e7bb077c5431
 
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/home/cyrus \
