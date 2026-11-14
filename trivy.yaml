@@ -1,0 +1,6 @@
+# Trivy reads this file from the directory it is started in, which for the
+# "Scan image" step in .github/workflows/image.yaml is the repository root.
+# The step's own inputs (severity, ignore-unfixed, exit-code) still apply on
+# top. A local `trivy image <ref>` from the repository root gets the same
+# exceptions as CI.
+ignorefile: .trivyignore.yaml

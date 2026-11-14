@@ -1,0 +1,17 @@
+# Findings the image scan accepts for a limited time. Every entry carries a
+# path, a reason and an expiry: when it lapses the gate goes red again and
+# someone has to look. Wired in through trivy.yaml, which the "Scan image" step
+# in .github/workflows/image.yaml picks up from the repository root.
+vulnerabilities:
+  # golang.org/x/net/html denial of service, compiled into the GitHub CLI.
+  # gh is installed from GitHub's apt repository, so the only fix is a gh
+  # release built against golang.org/x/net >= 0.62.0. v2.104.0, the latest on
+  # 2026-11-14, still ships 0.61.0. Remove this entry once
+  #   go version -m /usr/bin/gh | grep golang.org/x/net
+  # reports 0.62.0 or later. Scoped to the gh binary, so the same CVE anywhere
+  # else in the image still fails the build.
+  - id: CVE-2026-78661
+    paths:
+      - usr/bin/gh
+    statement: No gh release built against golang.org/x/net >= 0.62.0 yet; denial of service only, in a CLI.
+    expired_at: 2026-12-14
