@@ -67,7 +67,7 @@ a stale workspace.
 ```bash
 B="$(mktemp -d)" && echo '{"repositories":[]}' > "$B/config.json"
 LINEAR_CLIENT_ID=... LINEAR_CLIENT_SECRET=... CYRUS_BASE_URL=http://localhost:3456 \
-  npx -y cyrus-ai@0.2.73 --cyrus-home "$B" self-auth-linear
+  npx -y cyrus-ai@0.2.83 --cyrus-home "$B" self-auth-linear
 jq '.linearWorkspaces' "$B/config.json"   # workspace id, linearToken, linearRefreshToken
 ```
 
@@ -91,7 +91,7 @@ write. No Workflows permission.
 image:
   tag: v0.1.2-php                 # set it; the chart-version default may not be published
 cyrus:
-  version: "0.2.73"
+  version: "0.2.83"
   baseUrl: https://cyrus.example.com
   gitAuthorName: Cyrus Agent
   gitAuthorEmail: cyrus-agent@noreply.example.com   # see "Git identity"
